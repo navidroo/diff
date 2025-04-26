@@ -67,7 +67,7 @@ class Trainer:
             self.resume(path=args.resume)
 
     def __del__(self):
-        if not self.use_wandb:
+        if not self.use_wandb and hasattr(self, 'writer') and self.writer is not None:
             self.writer.close()
 
     def train(self):
@@ -83,7 +83,7 @@ class Trainer:
                         self.save_model('last')
 
                 if self.args.lr_scheduler == 'step':
-                    if not args.no_opt:
+                    if not self.args.no_opt:
                         self.scheduler.step()
                         if self.use_wandb:
                             wandb.log({'log_lr': np.log10(self.scheduler.get_last_lr())}, self.iter)
@@ -107,7 +107,7 @@ class Trainer:
             for i, sample in enumerate(inner_tnr):
                 sample = to_cuda(sample)
 
-                if not args.no_opt:
+                if not self.args.no_opt:
                     self.optimizer.zero_grad()
 
                 output = self.model(sample, train=True)
@@ -121,13 +121,13 @@ class Trainer:
                     self.train_stats[key] += loss_dict[key].detach().cpu().item() if torch.is_tensor(loss_dict[key]) else loss_dict[key] 
 
                 if self.epoch > 0 or not self.args.skip_first:
-                    if not args.no_opt:
+                    if not self.args.no_opt:
                         loss.backward()
 
                     if self.args.gradient_clip > 0.:
                         clip_grad_norm_(self.model.parameters(), self.args.gradient_clip)
 
-                    if not args.no_opt:
+                    if not self.args.no_opt:
                         self.optimizer.step()
 
                 self.iter += 1
@@ -216,7 +216,7 @@ class Trainer:
                 shuffle=True, drop_last=False) for phase in phases}
 
     def save_model(self, prefix=''):
-        if args.no_opt:
+        if self.args.no_opt:
             torch.save({
                 'model': self.model.state_dict(),
                 'epoch': self.epoch + 1,
@@ -237,7 +237,7 @@ class Trainer:
 
         checkpoint = torch.load(path)
         self.model.load_state_dict(checkpoint['model'])
-        if not args.no_opt:
+        if not self.args.no_opt:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.scheduler.load_state_dict(checkpoint['scheduler'])
         self.epoch = checkpoint['epoch']
