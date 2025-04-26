@@ -44,15 +44,21 @@ class Trainer:
         self.args.experiment_folder = self.experiment_folder
 
         if self.use_wandb:
-            wandb.init(project=args.wandb_project, dir=self.experiment_folder)
+            wandb.init(project=self.args.wandb_project, dir=self.experiment_folder)
             wandb.config.update(self.args)
             self.writer = None
-        # else:
-            # self.writer = SummaryWriter(log_dir=self.experiment_folder)
+        else:
+            # Initialize TensorBoard writer or set to None
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+                self.writer = SummaryWriter(log_dir=self.experiment_folder)
+            except ImportError:
+                print("TensorBoard not available, not logging training metrics.")
+                self.writer = None
 
-        if not args.no_opt:
-            self.optimizer = optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=args.w_decay)
-            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=args.lr_step, gamma=args.lr_gamma)
+        if not self.args.no_opt:
+            self.optimizer = optim.Adam(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.w_decay)
+            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=self.args.lr_step, gamma=self.args.lr_gamma)
         else:
             self.optimizer = None
             self.scheduler = None
@@ -63,8 +69,8 @@ class Trainer:
         self.val_stats = defaultdict(lambda: np.nan)
         self.best_optimization_loss = np.inf
 
-        if args.resume is not None:
-            self.resume(path=args.resume)
+        if self.args.resume is not None:
+            self.resume(path=self.args.resume)
 
     def __del__(self):
         if not self.use_wandb and hasattr(self, 'writer') and self.writer is not None:
@@ -87,7 +93,7 @@ class Trainer:
                         self.scheduler.step()
                         if self.use_wandb:
                             wandb.log({'log_lr': np.log10(self.scheduler.get_last_lr())}, self.iter)
-                        else:
+                        elif self.writer is not None:
                             self.writer.add_scalar('log_lr', np.log10(self.scheduler.get_last_lr()), self.epoch)
 
                 self.epoch += 1
@@ -143,7 +149,7 @@ class Trainer:
 
                     if self.use_wandb:
                         wandb.log({k + '/train': v for k, v in self.train_stats.items()}, self.iter)
-                    else:
+                    elif self.writer is not None:
                         for key in self.train_stats:
                             self.writer.add_scalar('train/' + key, self.train_stats[key], self.iter)
 
@@ -170,7 +176,7 @@ class Trainer:
 
             if self.use_wandb:
                 wandb.log({k + '/val': v for k, v in self.val_stats.items()}, self.iter)
-            else:
+            elif self.writer is not None:
                 for key in self.val_stats:
                     self.writer.add_scalar('val/' + key, self.val_stats[key], self.epoch)
 
