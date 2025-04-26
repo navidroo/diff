@@ -26,6 +26,7 @@ lr-scheduler: step
 lr-step: 100
 lr-gamma: 0.9
 gradient-clip: 0.01
+early-stopping-patience: 50
 
 # Model settings
 feature-extractor: UNet

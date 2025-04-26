@@ -68,6 +68,11 @@ class Trainer:
         self.train_stats = defaultdict(lambda: np.nan)
         self.val_stats = defaultdict(lambda: np.nan)
         self.best_optimization_loss = np.inf
+        
+        # Initialize early stopping variables
+        self.patience = self.args.early_stopping_patience
+        self.patience_counter = 0
+        self.early_stopping = False
 
         if self.args.resume is not None:
             self.resume(path=self.args.resume)
@@ -83,7 +88,20 @@ class Trainer:
                 self.train_epoch(tnr)
 
                 if (self.epoch + 1) % self.args.val_every_n_epochs == 0:
+                    prev_best = self.best_optimization_loss
                     self.validate()
+                    
+                    # Check for early stopping
+                    if self.val_stats['optimization_loss'] >= prev_best:
+                        self.patience_counter += 1
+                        if self.patience_counter >= self.patience:
+                            print(f"\nEarly stopping triggered! No improvement for {self.patience} validation checks.")
+                            print(f"Best validation loss: {self.best_optimization_loss}")
+                            self.early_stopping = True
+                            break
+                    else:
+                        # Reset counter if validation loss improved
+                        self.patience_counter = 0
 
                     if self.args.save_model in ['last', 'both']:
                         self.save_model('last')
@@ -97,6 +115,17 @@ class Trainer:
                             self.writer.add_scalar('log_lr', np.log10(self.scheduler.get_last_lr()), self.epoch)
 
                 self.epoch += 1
+                
+                # Update progress bar with early stopping info
+                tnr.set_postfix(
+                    training_loss=self.train_stats['optimization_loss'] if 'optimization_loss' in self.train_stats else np.nan,
+                    validation_loss=self.val_stats['optimization_loss'],
+                    best_validation_loss=self.best_optimization_loss,
+                    patience=f"{self.patience_counter}/{self.patience}"
+                )
+                
+                if self.early_stopping:
+                    break
 
     def train_epoch(self, tnr=None):
         self.train_stats = defaultdict(float)

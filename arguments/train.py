@@ -36,6 +36,7 @@ parser.add_argument('--lr-gamma', type=float, default=0.9, help='LR decay rate')
 parser.add_argument('--skip-first', action='store_true', help='Don\'t optimize during first epoch')
 parser.add_argument('--gradient-clip', type=float, default=0.01, help='If > 0, clips gradient norm to that value')
 parser.add_argument('--no-opt', action='store_true', help='Don\'t optimize')
+parser.add_argument('--early-stopping-patience', type=int, default=50, help='Number of validation checks without improvement before early stopping')
 
 # model
 parser.add_argument('--feature-extractor', type=str, default='UNet', help="Feature extractor for edge potentials. 'none' for the unlearned version.") 
