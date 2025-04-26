@@ -2,6 +2,7 @@ import os
 import argparse
 from collections import defaultdict
 import time
+import csv
 
 import numpy as np
 import torch
@@ -42,6 +43,17 @@ class Trainer:
 
         self.experiment_folder, self.args.expN, self.args.randN = new_log(os.path.join(args.save_dir, args.dataset), args)
         self.args.experiment_folder = self.experiment_folder
+        
+        # Create CSV log files
+        self.train_csv_path = os.path.join(self.experiment_folder, 'train_log.csv')
+        self.val_csv_path = os.path.join(self.experiment_folder, 'val_log.csv')
+        self.train_csv_file = open(self.train_csv_path, 'w', newline='')
+        self.val_csv_file = open(self.val_csv_path, 'w', newline='')
+        self.train_csv_writer = csv.writer(self.train_csv_file)
+        self.val_csv_writer = csv.writer(self.val_csv_file)
+        # Write headers (will be filled when first data is available)
+        self.train_csv_header_written = False
+        self.val_csv_header_written = False
 
         if self.use_wandb:
             wandb.init(project=self.args.wandb_project, dir=self.experiment_folder)
@@ -80,6 +92,12 @@ class Trainer:
     def __del__(self):
         if not self.use_wandb and hasattr(self, 'writer') and self.writer is not None:
             self.writer.close()
+        
+        # Close CSV files
+        if hasattr(self, 'train_csv_file') and self.train_csv_file is not None:
+            self.train_csv_file.close()
+        if hasattr(self, 'val_csv_file') and self.val_csv_file is not None:
+            self.val_csv_file.close()
 
     def train(self):
         with tqdm(range(self.epoch, self.args.num_epochs), leave=True) as tnr:
@@ -181,6 +199,18 @@ class Trainer:
                     elif self.writer is not None:
                         for key in self.train_stats:
                             self.writer.add_scalar('train/' + key, self.train_stats[key], self.iter)
+                    
+                    # Log to CSV
+                    if not self.train_csv_header_written:
+                        # Write header
+                        header = ['epoch', 'iter'] + list(self.train_stats.keys())
+                        self.train_csv_writer.writerow(header)
+                        self.train_csv_header_written = True
+                    
+                    # Write data
+                    row = [self.epoch, self.iter] + [self.train_stats[k] for k in self.train_stats]
+                    self.train_csv_writer.writerow(row)
+                    self.train_csv_file.flush()  # Make sure data is written to disk
 
                     # reset metrics
                     self.train_stats = defaultdict(float)
@@ -208,6 +238,18 @@ class Trainer:
             elif self.writer is not None:
                 for key in self.val_stats:
                     self.writer.add_scalar('val/' + key, self.val_stats[key], self.epoch)
+            
+            # Log to CSV
+            if not self.val_csv_header_written:
+                # Write header
+                header = ['epoch', 'iter'] + list(self.val_stats.keys())
+                self.val_csv_writer.writerow(header)
+                self.val_csv_header_written = True
+            
+            # Write data
+            row = [self.epoch, self.iter] + [self.val_stats[k] for k in self.val_stats]
+            self.val_csv_writer.writerow(row)
+            self.val_csv_file.flush()  # Make sure data is written to disk
 
             if self.val_stats['optimization_loss'] < self.best_optimization_loss:
                 self.best_optimization_loss = self.val_stats['optimization_loss']
