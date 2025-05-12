@@ -24,12 +24,7 @@ class Evaluator:
 
         self.dataloader = self.get_dataloader(args)
         
-        self.model = GADBase(args.feature_extractor, 
-                            Npre=args.Npre, 
-                            Ntrain=args.Ntrain,
-                            use_transformer=args.use_transformer,
-                            transformer_blocks=args.transformer_blocks,
-                            transformer_heads=args.transformer_heads)
+        self.model = GADBase(args.feature_extractor, Npre=args.Npre, Ntrain=args.Ntrain)
         self.resume(path=args.checkpoint)
         self.model.cuda().eval()
 

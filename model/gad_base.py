@@ -1,3 +1,4 @@
+
 from random import randrange
 from re import I
 
@@ -9,73 +10,17 @@ import segmentation_models_pytorch as smp
 INPUT_DIM = 4
 FEATURE_DIM = 64
 
-class SelfAttentionBlock(nn.Module):
-    """Transformer-style self-attention block for capturing long-range dependencies."""
-    def __init__(self, dim, num_heads=8, dropout=0.1):
-        super().__init__()
-        self.norm1 = nn.LayerNorm([dim])
-        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
-        self.norm2 = nn.LayerNorm([dim])
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, dim * 4),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim * 4, dim),
-            nn.Dropout(dropout)
-        )
-        
-    def forward(self, x):
-        # x shape: [B, C, H, W]
-        B, C, H, W = x.shape
-        
-        # Reshape to sequence for attention
-        x_flat = x.flatten(2).permute(0, 2, 1)  # [B, H*W, C]
-        
-        # Layer norm expects [B, *, dim]
-        x_norm = self.norm1(x_flat)
-        
-        # Self-attention
-        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
-        x_flat = x_flat + attn_out
-        
-        # MLP block
-        x_norm = self.norm2(x_flat)
-        x_flat = x_flat + self.mlp(x_norm)
-        
-        # Reshape back to spatial
-        x = x_flat.permute(0, 2, 1).reshape(B, C, H, W)
-        return x
-
-class TransformerDiffusion(nn.Module):
-    """Enhances the diffusion process with transformer blocks for long-range dependencies."""
-    def __init__(self, feature_dim, num_blocks=2, num_heads=8):
-        super().__init__()
-        self.transformer_blocks = nn.ModuleList([
-            SelfAttentionBlock(feature_dim, num_heads=num_heads)
-            for _ in range(num_blocks)
-        ])
-        
-    def forward(self, features):
-        transformed = features
-        for block in self.transformer_blocks:
-            transformed = block(transformed)
-        return transformed
-
 class GADBase(nn.Module):
     
     def __init__(
             self, feature_extractor='Unet',
-            Npre=8000, Ntrain=1024,
-            use_transformer=True,
-            transformer_blocks=2,
-            transformer_heads=8
+            Npre=8000, Ntrain=1024, 
     ):
         super().__init__()
 
         self.feature_extractor_name = feature_extractor    
         self.Npre = Npre
         self.Ntrain = Ntrain
-        self.use_transformer = use_transformer
  
         if feature_extractor=='none': 
             # RGB verion of DADA does not need a deep feature extractor
@@ -90,12 +35,7 @@ class GADBase(nn.Module):
                 smp.Unet('resnet50', classes=FEATURE_DIM, in_channels=INPUT_DIM),
                 torch.nn.AvgPool2d(kernel_size=2, stride=2) ).cuda()
             self.logk = torch.nn.Parameter(torch.log(torch.tensor(0.03)))
-            
-            # Add transformer module for high-scaling factors
-            if use_transformer:
-                self.transformer = TransformerDiffusion(FEATURE_DIM, 
-                                                       num_blocks=transformer_blocks,
-                                                       num_heads=transformer_heads)
+
         else:
             raise NotImplementedError(f'Feature extractor {feature_extractor}')
              
@@ -138,10 +78,6 @@ class GADBase(nn.Module):
             guide_feats = torch.cat([guide, img], 1) 
         else:
             guide_feats = self.feature_extractor(torch.cat([guide, img-img.mean((1,2,3), keepdim=True) ], 1))
-            
-            # Apply transformer for long-range dependencies if enabled
-            if self.use_transformer:
-                guide_feats = self.transformer(guide_feats)
         
         # Convert the features to coefficients with the Perona-Malik edge-detection function
         cv, ch = c(guide_feats, K=K)

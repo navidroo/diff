@@ -2,7 +2,6 @@ import os
 import argparse
 from collections import defaultdict
 import time
-import csv
 
 import numpy as np
 import torch
@@ -35,42 +34,22 @@ class Trainer:
         self.model = GADBase( 
             args.feature_extractor, 
             Npre=args.Npre,
-            Ntrain=args.Ntrain,
-            use_transformer=args.use_transformer,
-            transformer_blocks=args.transformer_blocks,
-            transformer_heads=args.transformer_heads
+            Ntrain=args.Ntrain, 
         ).cuda()
 
         self.experiment_folder, self.args.expN, self.args.randN = new_log(os.path.join(args.save_dir, args.dataset), args)
         self.args.experiment_folder = self.experiment_folder
-        
-        # Create CSV log files
-        self.train_csv_path = os.path.join(self.experiment_folder, 'train_log.csv')
-        self.val_csv_path = os.path.join(self.experiment_folder, 'val_log.csv')
-        self.train_csv_file = open(self.train_csv_path, 'w', newline='')
-        self.val_csv_file = open(self.val_csv_path, 'w', newline='')
-        self.train_csv_writer = csv.writer(self.train_csv_file)
-        self.val_csv_writer = csv.writer(self.val_csv_file)
-        # Write headers (will be filled when first data is available)
-        self.train_csv_header_written = False
-        self.val_csv_header_written = False
 
         if self.use_wandb:
-            wandb.init(project=self.args.wandb_project, dir=self.experiment_folder)
+            wandb.init(project=args.wandb_project, dir=self.experiment_folder)
             wandb.config.update(self.args)
             self.writer = None
-        else:
-            # Initialize TensorBoard writer or set to None
-            try:
-                from torch.utils.tensorboard import SummaryWriter
-                self.writer = SummaryWriter(log_dir=self.experiment_folder)
-            except ImportError:
-                print("TensorBoard not available, not logging training metrics.")
-                self.writer = None
+        # else:
+            # self.writer = SummaryWriter(log_dir=self.experiment_folder)
 
-        if not self.args.no_opt:
-            self.optimizer = optim.Adam(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.w_decay)
-            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=self.args.lr_step, gamma=self.args.lr_gamma)
+        if not args.no_opt:
+            self.optimizer = optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=args.w_decay)
+            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=args.lr_step, gamma=args.lr_gamma)
         else:
             self.optimizer = None
             self.scheduler = None
@@ -80,24 +59,13 @@ class Trainer:
         self.train_stats = defaultdict(lambda: np.nan)
         self.val_stats = defaultdict(lambda: np.nan)
         self.best_optimization_loss = np.inf
-        
-        # Initialize early stopping variables
-        self.patience = self.args.early_stopping_patience
-        self.patience_counter = 0
-        self.early_stopping = False
 
-        if self.args.resume is not None:
-            self.resume(path=self.args.resume)
+        if args.resume is not None:
+            self.resume(path=args.resume)
 
     def __del__(self):
-        if not self.use_wandb and hasattr(self, 'writer') and self.writer is not None:
+        if not self.use_wandb:
             self.writer.close()
-        
-        # Close CSV files
-        if hasattr(self, 'train_csv_file') and self.train_csv_file is not None:
-            self.train_csv_file.close()
-        if hasattr(self, 'val_csv_file') and self.val_csv_file is not None:
-            self.val_csv_file.close()
 
     def train(self):
         with tqdm(range(self.epoch, self.args.num_epochs), leave=True) as tnr:
@@ -106,44 +74,20 @@ class Trainer:
                 self.train_epoch(tnr)
 
                 if (self.epoch + 1) % self.args.val_every_n_epochs == 0:
-                    prev_best = self.best_optimization_loss
                     self.validate()
-                    
-                    # Check for early stopping
-                    if self.val_stats['optimization_loss'] >= prev_best:
-                        self.patience_counter += 1
-                        if self.patience_counter >= self.patience:
-                            print(f"\nEarly stopping triggered! No improvement for {self.patience} validation checks.")
-                            print(f"Best validation loss: {self.best_optimization_loss}")
-                            self.early_stopping = True
-                            break
-                    else:
-                        # Reset counter if validation loss improved
-                        self.patience_counter = 0
 
                     if self.args.save_model in ['last', 'both']:
                         self.save_model('last')
 
                 if self.args.lr_scheduler == 'step':
-                    if not self.args.no_opt:
+                    if not args.no_opt:
                         self.scheduler.step()
                         if self.use_wandb:
                             wandb.log({'log_lr': np.log10(self.scheduler.get_last_lr())}, self.iter)
-                        elif self.writer is not None:
+                        else:
                             self.writer.add_scalar('log_lr', np.log10(self.scheduler.get_last_lr()), self.epoch)
 
                 self.epoch += 1
-                
-                # Update progress bar with early stopping info
-                tnr.set_postfix(
-                    training_loss=self.train_stats['optimization_loss'] if 'optimization_loss' in self.train_stats else np.nan,
-                    validation_loss=self.val_stats['optimization_loss'],
-                    best_validation_loss=self.best_optimization_loss,
-                    patience=f"{self.patience_counter}/{self.patience}"
-                )
-                
-                if self.early_stopping:
-                    break
 
     def train_epoch(self, tnr=None):
         self.train_stats = defaultdict(float)
@@ -160,7 +104,7 @@ class Trainer:
             for i, sample in enumerate(inner_tnr):
                 sample = to_cuda(sample)
 
-                if not self.args.no_opt:
+                if not args.no_opt:
                     self.optimizer.zero_grad()
 
                 output = self.model(sample, train=True)
@@ -174,13 +118,13 @@ class Trainer:
                     self.train_stats[key] += loss_dict[key].detach().cpu().item() if torch.is_tensor(loss_dict[key]) else loss_dict[key] 
 
                 if self.epoch > 0 or not self.args.skip_first:
-                    if not self.args.no_opt:
+                    if not args.no_opt:
                         loss.backward()
 
                     if self.args.gradient_clip > 0.:
                         clip_grad_norm_(self.model.parameters(), self.args.gradient_clip)
 
-                    if not self.args.no_opt:
+                    if not args.no_opt:
                         self.optimizer.step()
 
                 self.iter += 1
@@ -196,21 +140,9 @@ class Trainer:
 
                     if self.use_wandb:
                         wandb.log({k + '/train': v for k, v in self.train_stats.items()}, self.iter)
-                    elif self.writer is not None:
+                    else:
                         for key in self.train_stats:
                             self.writer.add_scalar('train/' + key, self.train_stats[key], self.iter)
-                    
-                    # Log to CSV
-                    if not self.train_csv_header_written:
-                        # Write header
-                        header = ['epoch', 'iter'] + list(self.train_stats.keys())
-                        self.train_csv_writer.writerow(header)
-                        self.train_csv_header_written = True
-                    
-                    # Write data
-                    row = [self.epoch, self.iter] + [self.train_stats[k] for k in self.train_stats]
-                    self.train_csv_writer.writerow(row)
-                    self.train_csv_file.flush()  # Make sure data is written to disk
 
                     # reset metrics
                     self.train_stats = defaultdict(float)
@@ -235,21 +167,9 @@ class Trainer:
 
             if self.use_wandb:
                 wandb.log({k + '/val': v for k, v in self.val_stats.items()}, self.iter)
-            elif self.writer is not None:
+            else:
                 for key in self.val_stats:
                     self.writer.add_scalar('val/' + key, self.val_stats[key], self.epoch)
-            
-            # Log to CSV
-            if not self.val_csv_header_written:
-                # Write header
-                header = ['epoch', 'iter'] + list(self.val_stats.keys())
-                self.val_csv_writer.writerow(header)
-                self.val_csv_header_written = True
-            
-            # Write data
-            row = [self.epoch, self.iter] + [self.val_stats[k] for k in self.val_stats]
-            self.val_csv_writer.writerow(row)
-            self.val_csv_file.flush()  # Make sure data is written to disk
 
             if self.val_stats['optimization_loss'] < self.best_optimization_loss:
                 self.best_optimization_loss = self.val_stats['optimization_loss']
@@ -293,7 +213,7 @@ class Trainer:
                 shuffle=True, drop_last=False) for phase in phases}
 
     def save_model(self, prefix=''):
-        if self.args.no_opt:
+        if args.no_opt:
             torch.save({
                 'model': self.model.state_dict(),
                 'epoch': self.epoch + 1,
@@ -314,7 +234,7 @@ class Trainer:
 
         checkpoint = torch.load(path)
         self.model.load_state_dict(checkpoint['model'])
-        if not self.args.no_opt:
+        if not args.no_opt:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.scheduler.load_state_dict(checkpoint['scheduler'])
         self.epoch = checkpoint['epoch']
