@@ -173,7 +173,7 @@ class Trainer:
                                                            focal_lambda=self.args.focal_lambda)
                     elif self.args.loss == 'hybrid':
                         # Compute both losses
-                        _, l1_loss_dict = get_loss(output, sample)
+                        l1_loss, l1_loss_dict = get_loss(output, sample)
                         freq_loss, freq_loss_dict = get_frequency_loss(output, sample, 
                                                                      alpha=self.args.freq_alpha, 
                                                                      beta=self.args.freq_beta,
@@ -184,7 +184,7 @@ class Trainer:
                         
                         # Combine losses with weighting
                         w = self.args.hybrid_weight
-                        loss = w * freq_loss + (1-w) * l1_loss_dict['optimization_loss']
+                        loss = w * freq_loss + (1-w) * l1_loss  # Use the raw tensor with gradients
                         
                         # Combine the loss dicts
                         loss_dict = freq_loss_dict.copy()
@@ -288,7 +288,7 @@ class Trainer:
                                                            focal_lambda=self.args.focal_lambda)
                     elif self.args.loss == 'hybrid':
                         # Compute both losses
-                        _, l1_loss_dict = get_loss(output, sample)
+                        l1_loss, l1_loss_dict = get_loss(output, sample)
                         freq_loss, freq_loss_dict = get_frequency_loss(output, sample, 
                                                                      alpha=self.args.freq_alpha, 
                                                                      beta=self.args.freq_beta,
@@ -299,7 +299,7 @@ class Trainer:
                         
                         # Combine losses with weighting
                         w = self.args.hybrid_weight
-                        loss = w * freq_loss + (1-w) * l1_loss_dict['optimization_loss']
+                        loss = w * freq_loss + (1-w) * l1_loss  # Use the raw tensor with gradients
                         
                         # Combine the loss dicts
                         loss_dict = freq_loss_dict.copy()
@@ -325,7 +325,7 @@ class Trainer:
                         w_spectral = self.args.spectral_loss_weight
                         combined_loss = (1 - w_spectral) * loss + w_spectral * spectral_loss
                         
-                        # Update loss for reporting
+                        # Update loss for backpropagation
                         loss = combined_loss
                         loss_dict['combined_loss'] = loss.detach().item()
                         loss_dict['optimization_loss'] = loss.detach().item()  # For consistent tracking

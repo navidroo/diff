@@ -13,6 +13,7 @@ def get_loss(output, sample):
         'l1_loss': l1_loss.detach().item(),
         'mse_loss': mse_loss.detach().item(),
         'optimization_loss': loss.detach().item(),
+        'raw_loss': loss
     }
         
 
