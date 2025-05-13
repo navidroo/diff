@@ -61,12 +61,6 @@ class FocalFrequencyLoss(nn.Module):
         pred_phase = torch.angle(pred_fft)
         target_phase = torch.angle(target_fft)
         
-        # Alternatively, extract phase using torch.atan2
-        # pred_real, pred_imag = pred_fft.real, pred_fft.imag
-        # target_real, target_imag = target_fft.real, target_fft.imag
-        # pred_phase = torch.atan2(pred_imag, pred_real)
-        # target_phase = torch.atan2(target_imag, target_real)
-        
         # Magnitude error
         mag_diff = torch.abs(pred_mag - target_mag)
         
@@ -77,12 +71,16 @@ class FocalFrequencyLoss(nn.Module):
         ))
         
         # Create frequency weight matrix - distance from center (zero frequency)
-        y_coords = torch.linspace(-1, 1, height, device=pred.device).view(-1, 1, 1, 1)
-        x_coords = torch.linspace(-1, 1, width, device=pred.device).view(1, -1, 1, 1)
+        # Create meshgrid in normalized [-1, 1] coordinate system
+        y_grid = torch.linspace(-1, 1, height, device=pred.device)
+        x_grid = torch.linspace(-1, 1, width, device=pred.device)
+        y_grid, x_grid = torch.meshgrid(y_grid, x_grid, indexing='ij')
         
-        # Euclidean distance from center (higher for higher frequencies)
-        freq_dist = torch.sqrt(y_coords**2 + x_coords**2)
-        freq_weights = freq_dist.expand(batch_size, -1, channels, -1)
+        # Calculate distance from center
+        freq_grid = torch.sqrt(y_grid**2 + x_grid**2)
+        
+        # Unsqueeze to add batch and channel dimensions
+        freq_grid = freq_grid.unsqueeze(0).unsqueeze(0).expand(batch_size, channels, height, width)
         
         # Focal weighting using non-linear scaling (sigmoid-based)
         # This applies greater weights to harder-to-learn frequencies
@@ -90,10 +88,10 @@ class FocalFrequencyLoss(nn.Module):
         focal_weights = 1 - torch.exp(-self.focal_lambda * rel_error)  # Error-based focal weighting
 
         # Apply frequency emphasis and focal weighting to magnitude loss
-        weighted_mag_diff = mag_diff * freq_weights * focal_weights
+        weighted_mag_diff = mag_diff * freq_grid * focal_weights
         
         # Weight phase loss by frequency importance and signal strength
-        phase_weights = freq_weights * target_mag
+        phase_weights = freq_grid * target_mag
         weighted_phase_diff = phase_diff * phase_weights / (target_mag.max() + self.eps)
         
         # Compute separate loss components
@@ -147,8 +145,12 @@ class LogFocalFrequencyLoss(nn.Module):
         phase_diff = torch.abs(torch.atan2(torch.sin(pred_phase - target_phase), torch.cos(pred_phase - target_phase)))
         
         # Create frequency distance weights
-        y_grid = torch.linspace(-1, 1, h, device=pred.device).view(-1, 1)
-        x_grid = torch.linspace(-1, 1, w, device=pred.device).view(1, -1)
+        # Create meshgrid in normalized [-1, 1] coordinate system
+        y_grid = torch.linspace(-1, 1, h, device=pred.device)
+        x_grid = torch.linspace(-1, 1, w, device=pred.device)
+        y_grid, x_grid = torch.meshgrid(y_grid, x_grid, indexing='ij')
+        
+        # Calculate distance from center
         freq_grid = torch.sqrt(y_grid**2 + x_grid**2)
         
         # Expand grid to match batch and channel dimensions
