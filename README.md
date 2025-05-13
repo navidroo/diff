@@ -74,6 +74,89 @@ datafolder
 ### 🚩💾 Checkpoints
 Our pretrained model checkpoints can be downloaded [here](https://drive.google.com/file/d/1pfJ94vkDl6OQQ4QYItRxEbEjPhalrs_5/view?usp=share_link).
 
+## 🆕 Focal Frequency Loss with Phase Consistency
+We've extended DADA with a spectral-domain loss function called Focal Frequency Loss that provides greater emphasis on high-frequency details. This loss includes:
+
+1. **Magnitude Component**:
+   - Computes the 2D FFT of both predicted and ground-truth depth maps using `torch.fft.fft2`
+   - Applies greater weights to higher frequencies
+   - Uses a non-linear focal weighting mechanism where harder-to-learn frequencies contribute more to the loss
+
+2. **Phase Consistency Component**:
+   - Extracts the phase (angle) from the FFT outputs using `torch.angle()`
+   - Computes the phase difference between predicted and ground-truth depth in the frequency domain
+   - Penalizes phase misalignment, encouraging better structural reconstruction
+   - Focuses on high-frequency components and areas with strong signal magnitude
+
+3. **Focal Weighting Options**:
+   - **Sigmoid-based**: `1 - exp(-λ * rel_error)` emphasizes frequencies with larger relative errors
+   - **Log-based**: `log(1 + rel_error * 10)^γ` provides smoother weighting for harder examples
+
+### Training with Frequency Loss
+To train with the Focal Frequency Loss, use:
+
+```bash
+# Using sigmoid-based focal weighting (default)
+python run_train.py --dataset Middlebury --data-dir ./datafolder/ --save-dir ./save_dir/ --loss frequency --freq-alpha 1.0 --freq-beta 0.5 --focal-lambda 0.5 --wandb --num-epochs 4500 --scaling 8 --val-every-n-epochs 10 --lr-step 100 --in-memory
+
+# Using log-based focal weighting
+python run_train.py --dataset Middlebury --data-dir ./datafolder/ --save-dir ./save_dir/ --loss frequency --freq-alpha 1.0 --freq-beta 0.5 --use-log-focal --focal-gamma 2.0 --wandb --num-epochs 4500 --scaling 8 --val-every-n-epochs 10 --lr-step 100 --in-memory
+
+# Using spectral loss as an additional loss with standard L1 loss
+python run_train.py --dataset Middlebury --data-dir ./datafolder/ --save-dir ./save_dir/ --loss l1 --use_spectral_loss --spectral_loss_weight 0.3 --freq-alpha 1.0 --freq-beta 0.5 --use-log-focal --focal-gamma 2.0 --wandb --num-epochs 4500 --scaling 8 --val-every-n-epochs 10 --lr-step 100 --in-memory
+
+# Using Automatic Mixed Precision (AMP) for faster training with less memory usage
+python run_train.py --dataset NYUv2 --data-dir ./datafolder/ --save-dir ./save_dir/ --loss l1 --use_spectral_loss --spectral_loss_weight 0.4 --use_amp --wandb --num-epochs 550 --scaling 8 --val-every-n-epochs 4 --lr-step 10 --in-memory
+```
+
+Parameters:
+- `--loss`: Choose between `l1` (original), `frequency` (our new loss), or `hybrid` (combination)
+- `--use_spectral_loss`: Add spectral loss as a complementary loss to the primary loss type
+- `--spectral_loss_weight`: Weight for the spectral loss when used as an additional loss (0.0-1.0)
+- `--freq-alpha`: Weight for magnitude component in frequency loss (default: 1.0)
+- `--freq-beta`: Weight for phase component in frequency loss (default: 1.0)
+- `--use-log-focal`: Use logarithmic-based focal weighting instead of sigmoid-based
+- `--focal-lambda`: Controls strength of sigmoid-based focal weighting (higher = stronger effect, default: 0.5)
+- `--focal-gamma`: Controls strength of log-based focal weighting (higher = stronger effect, default: 2.0)
+- `--hybrid-weight`: Weight for frequency loss in hybrid loss (freq*w + l1*(1-w))
+- `--use_amp`: Enable Automatic Mixed Precision training for faster training and reduced memory usage
+
+### Evaluation with Frequency Loss
+For evaluation with the frequency loss:
+
+```bash
+# Standard evaluation with frequency loss
+python run_eval.py --dataset <...> --data-dir ./datafolder/ --checkpoint ./save_dir/experiment_<...>/best_model.pth --scaling <...> --loss frequency --freq-alpha 1.0 --freq-beta 0.5 --focal-lambda 0.5
+
+# Evaluation with log-based focal weighting
+python run_eval.py --dataset <...> --data-dir ./datafolder/ --checkpoint ./save_dir/experiment_<...>/best_model.pth --scaling <...> --loss frequency --freq-alpha 1.0 --freq-beta 0.5 --use-log-focal --focal-gamma 2.0
+
+# Evaluation with added spectral loss component
+python run_eval.py --dataset <...> --data-dir ./datafolder/ --checkpoint ./save_dir/experiment_<...>/best_model.pth --scaling <...> --loss l1 --use_spectral_loss --spectral_loss_weight 0.3 --freq-alpha 1.0 --freq-beta 0.5
+
+# Evaluation with AMP for faster evaluation on GPUs
+python run_eval.py --dataset <...> --data-dir ./datafolder/ --checkpoint ./save_dir/experiment_<...>/best_model.pth --scaling <...> --use_amp
+```
+
+### Debugging Tips
+
+If you encounter issues with the frequency loss:
+
+1. **Memory Usage**: The FFT operation can be memory intensive. If you encounter out-of-memory errors:
+   - Reduce batch size
+   - Enable AMP with `--use_amp`
+   - Try using a smaller crop size
+
+2. **NaN Values**: If training diverges or produces NaN values:
+   - Check the error by adding `print(torch.isnan(pred).any(), torch.isnan(target).any())` to debug
+   - Try reducing the focal weighting strength (`--focal-lambda` or `--focal-gamma`)
+   - Use a smaller learning rate
+
+3. **Hyperparameter Tuning**:
+   - Start with `--freq-alpha 1.0 --freq-beta 0.5` (equal weight to magnitude, half to phase)
+   - For log-based focal weighting, start with `--focal-gamma 2.0`
+   - For sigmoid-based focal weighting, start with `--focal-lambda 0.5`
+
 ## 🏋️ Training
 
 Run the training script via

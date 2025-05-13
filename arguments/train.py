@@ -25,7 +25,19 @@ parser.add_argument('--no-flip', action='store_true', default=False, help='Switc
 parser.add_argument('--in-memory', action='store_true', default=False, help='Hold data in memory during training')
 
 # training
-parser.add_argument('--loss', default='l1', type=str, choices=['l1'])
+parser.add_argument('--loss', default='l1', type=str, choices=['l1', 'frequency', 'hybrid'])
+parser.add_argument('--use_spectral_loss', action='store_true', default=False, help='Use spectral loss in addition to the primary loss')
+parser.add_argument('--spectral_loss_weight', type=float, default=0.5, help='Weight for spectral loss when used with --use_spectral_loss (0.0-1.0)')
+
+# frequency loss parameters
+parser.add_argument('--freq-alpha', type=float, default=1.0, help='Weight for magnitude component in frequency loss')
+parser.add_argument('--freq-beta', type=float, default=1.0, help='Weight for phase component in frequency loss')
+parser.add_argument('--phase-weight', type=float, default=0.5, help='Legacy parameter: Weight for phase consistency in frequency loss (0.0 = magnitude only, 1.0 = phase only)')
+parser.add_argument('--use-log-focal', action='store_true', default=False, help='Use logarithmic-based focal weighting instead of sigmoid-based')
+parser.add_argument('--focal-lambda', type=float, default=0.5, help='Controls strength of sigmoid-based focal weighting (higher = stronger effect)')
+parser.add_argument('--focal-gamma', type=float, default=2.0, help='Controls strength of log-based focal weighting (higher = stronger effect)')
+
+parser.add_argument('--hybrid-weight', type=float, default=0.5, help='Weight for frequency loss in hybrid loss (freq*w + l1*(1-w))')
 parser.add_argument('--num-epochs', type=int, default=4500) 
 parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--momentum', type=float, default=0.9)
@@ -36,6 +48,7 @@ parser.add_argument('--lr-gamma', type=float, default=0.9, help='LR decay rate')
 parser.add_argument('--skip-first', action='store_true', help='Don\'t optimize during first epoch')
 parser.add_argument('--gradient-clip', type=float, default=0.01, help='If > 0, clips gradient norm to that value')
 parser.add_argument('--no-opt', action='store_true', help='Don\'t optimize')
+parser.add_argument('--use_amp', action='store_true', default=False, help='Use Automatic Mixed Precision (AMP) training')
 
 # model
 parser.add_argument('--feature-extractor', type=str, default='UNet', help="Feature extractor for edge potentials. 'none' for the unlearned version.") 
