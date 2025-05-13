@@ -223,4 +223,5 @@ def get_frequency_loss(output, sample, alpha=1.0, beta=1.0, phase_weight=0.5, us
         'l1_loss': l1_loss.detach().item(),
         'mse_loss': mse_loss.detach().item(),
         'optimization_loss': loss.detach().item(),
+        'raw_loss': loss  # Add raw loss to ensure tensor with gradients is accessible
     } 

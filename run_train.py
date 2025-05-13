@@ -10,6 +10,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from torchvision.transforms import Normalize
 from tqdm import tqdm
+from contextlib import nullcontext
 
 from arguments import train_parser
 from model import GADBase
@@ -155,8 +156,8 @@ class Trainer:
                 if not args.no_opt:
                     self.optimizer.zero_grad()
 
-                # Use AMP autocast if enabled
-                with torch.cuda.amp.autocast() if self.args.use_amp else torch.no_grad():
+                # Use AMP autocast if enabled - but don't use torch.no_grad for training!
+                with torch.cuda.amp.autocast() if self.args.use_amp else nullcontext():
                     # Pass context to the model
                     output = self.model(sample, train=True)
                     
@@ -272,7 +273,7 @@ class Trainer:
                 sample = to_cuda(sample)
 
                 # Use AMP autocast if enabled (no gradients needed in validation)
-                with torch.cuda.amp.autocast() if self.args.use_amp else torch.no_grad():
+                with torch.cuda.amp.autocast() if self.args.use_amp else nullcontext():
                     output = self.model(sample)
                     
                     # Calculate the primary loss based on the selected loss type
