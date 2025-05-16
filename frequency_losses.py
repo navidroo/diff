@@ -4,6 +4,94 @@ import torch.nn.functional as F
 import math
 
 
+class MagnitudeFrequencyLoss(nn.Module):
+    """
+    Magnitude-only Frequency Loss for spectral-domain supervision in depth super-resolution.
+    Removes phase components that can cause instability.
+    """
+    def __init__(self, alpha=1.0, use_focal_weight=True, focal_lambda=0.5, eps=1e-8, norm="ortho"):
+        """
+        Initialize the Magnitude-only Frequency Loss
+
+        Args:
+            alpha: Weight for the magnitude loss
+            use_focal_weight: Whether to use focal weighting
+            focal_lambda: Controls the non-linear scaling of frequency errors
+            eps: Small constant for numerical stability
+            norm: Normalization method for FFT ("ortho" recommended for stability)
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.use_focal_weight = use_focal_weight
+        self.focal_lambda = focal_lambda
+        self.eps = eps
+        self.norm = norm
+        
+    def forward(self, pred, target, mask=None):
+        """
+        Args:
+            pred: Predicted depth map (B, 1, H, W)
+            target: Ground truth depth map (B, 1, H, W)
+            mask: Optional mask to ignore certain regions (B, 1, H, W)
+        """
+        if mask is not None:
+            # Apply mask if provided
+            valid_mask = mask == 1.0
+            if not valid_mask.any():
+                return torch.tensor(0.0, device=pred.device), torch.tensor(0.0, device=pred.device)
+                
+            # Only compute loss on valid regions
+            pred = pred * valid_mask
+            target = target * valid_mask
+        
+        # Get tensor dimensions
+        batch_size, channels, height, width = pred.shape
+        
+        # Compute full 2D FFT with normalization (returns complex tensors)
+        pred_fft = torch.fft.fft2(pred, norm=self.norm)
+        target_fft = torch.fft.fft2(target, norm=self.norm)
+        
+        # Shift zero frequency to center for better frequency weighting
+        pred_fft = torch.fft.fftshift(pred_fft)
+        target_fft = torch.fft.fftshift(target_fft)
+        
+        # Extract magnitude
+        pred_mag = torch.abs(pred_fft) + self.eps
+        target_mag = torch.abs(target_fft) + self.eps
+        
+        # Magnitude error
+        mag_diff = torch.abs(pred_mag - target_mag)
+        
+        # Create frequency weight matrix - distance from center (zero frequency)
+        # Create meshgrid in normalized [-1, 1] coordinate system
+        y_grid = torch.linspace(-1, 1, height, device=pred.device)
+        x_grid = torch.linspace(-1, 1, width, device=pred.device)
+        y_grid, x_grid = torch.meshgrid(y_grid, x_grid, indexing='ij')
+        
+        # Calculate distance from center
+        freq_grid = torch.sqrt(y_grid**2 + x_grid**2)
+        
+        # Unsqueeze to add batch and channel dimensions
+        freq_grid = freq_grid.unsqueeze(0).unsqueeze(0).expand(batch_size, channels, height, width)
+        
+        # Apply frequency emphasis
+        weighted_mag_diff = mag_diff * freq_grid
+        
+        # Focal weighting if enabled
+        if self.use_focal_weight:
+            # Normalize relative error for stability
+            rel_error = mag_diff / (target_mag.mean() + self.eps)
+            # Limit maximum focal weight for stability
+            focal_weights = 1 - torch.exp(-self.focal_lambda * rel_error)
+            focal_weights = torch.clamp(focal_weights, 0.1, 2.0)
+            weighted_mag_diff = weighted_mag_diff * focal_weights
+        
+        # Compute loss
+        mag_loss = weighted_mag_diff.mean()
+        
+        return self.alpha * mag_loss, mag_loss
+        
+
 class FocalFrequencyLoss(nn.Module):
     """
     Focal Frequency Loss for spectral-domain supervision in depth super-resolution.
@@ -175,7 +263,9 @@ class LogFocalFrequencyLoss(nn.Module):
         return total_loss, mag_loss, phase_loss
 
 
-def get_frequency_loss(output, sample, alpha=1.0, beta=1.0, phase_weight=0.5, use_log_focal=False, focal_gamma=2.0, focal_lambda=0.5):
+def get_frequency_loss(output, sample, alpha=1.0, beta=1.0, phase_weight=0.5, 
+                       use_log_focal=False, focal_gamma=2.0, focal_lambda=0.5,
+                       magnitude_only=False, use_focal_weight=True, norm="ortho"):
     """
     Wrapper function to compute the frequency loss
 
@@ -188,13 +278,26 @@ def get_frequency_loss(output, sample, alpha=1.0, beta=1.0, phase_weight=0.5, us
         use_log_focal: Whether to use the logarithmic focal weighting
         focal_gamma: Controls the strength of focal weighting (for log-based)
         focal_lambda: Controls the strength of sigmoid-based focal weighting
+        magnitude_only: If True, only use magnitude component (no phase)
+        use_focal_weight: Whether to use focal weighting at all
+        norm: Normalization method for FFT
     """
     y_pred = output['y_pred']
     y, mask_hr = sample['y'], sample['mask_hr']
     
-    # Use appropriate version of the focal frequency loss
-    if use_log_focal:
+    # Use appropriate version of the frequency loss
+    if magnitude_only:
+        freq_loss_fn = MagnitudeFrequencyLoss(
+            alpha=alpha, 
+            use_focal_weight=use_focal_weight,
+            focal_lambda=focal_lambda,
+            norm=norm
+        )
+        freq_loss, mag_loss = freq_loss_fn(y_pred, y, mask_hr)
+        phase_loss = torch.tensor(0.0, device=y_pred.device)
+    elif use_log_focal:
         freq_loss_fn = LogFocalFrequencyLoss(alpha=alpha, beta=beta, focal_gamma=focal_gamma)
+        freq_loss, mag_loss, phase_loss = freq_loss_fn(y_pred, y, mask_hr)
     else:
         # For compatibility with phase_weight parameter
         if phase_weight < 1.0 and (alpha == 1.0 and beta == 1.0):  # Only use phase_weight if alpha and beta are default
@@ -205,9 +308,7 @@ def get_frequency_loss(output, sample, alpha=1.0, beta=1.0, phase_weight=0.5, us
             beta_scaled = beta
             
         freq_loss_fn = FocalFrequencyLoss(alpha=alpha_scaled, beta=beta_scaled, focal_lambda=focal_lambda)
-    
-    # Compute the frequency loss
-    freq_loss, mag_loss, phase_loss = freq_loss_fn(y_pred, y, mask_hr)
+        freq_loss, mag_loss, phase_loss = freq_loss_fn(y_pred, y, mask_hr)
     
     # Also compute standard losses for reference/comparison
     mse_loss = F.mse_loss(y_pred[mask_hr == 1.], y[mask_hr == 1.])
@@ -219,7 +320,7 @@ def get_frequency_loss(output, sample, alpha=1.0, beta=1.0, phase_weight=0.5, us
     return loss, {
         'freq_loss': freq_loss.detach().item(),
         'mag_loss': mag_loss.detach().item(), 
-        'phase_loss': phase_loss.detach().item(),
+        'phase_loss': phase_loss.detach().item() if not magnitude_only else 0.0,
         'l1_loss': l1_loss.detach().item(),
         'mse_loss': mse_loss.detach().item(),
         'optimization_loss': loss.detach().item(),

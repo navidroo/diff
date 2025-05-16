@@ -7,6 +7,7 @@ import torch
 from torchvision.transforms import Normalize
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from contextlib import nullcontext
 
 from arguments import eval_parser
 from model import GADBase
@@ -14,7 +15,7 @@ from data import MiddleburyDataset, NYUv2Dataset, DIMLDataset
 from utils import to_cuda
 
 from losses import get_loss
-from frequency_losses import get_frequency_loss, FocalFrequencyLoss, LogFocalFrequencyLoss
+from frequency_losses import get_frequency_loss, FocalFrequencyLoss, LogFocalFrequencyLoss, MagnitudeFrequencyLoss
 import time
 
 
@@ -30,18 +31,30 @@ class Evaluator:
         self.model.cuda().eval()
         
         # Initialize spectral loss if needed
-        if args.use_spectral_loss:
+        if args.use_spectral_loss or args.loss in ['frequency', 'hybrid', 'curriculum']:
             try:
-                self.spectral_loss_fn = FocalFrequencyLoss(
-                    alpha=args.freq_alpha,
-                    beta=args.freq_beta,
-                    focal_lambda=args.focal_lambda
-                ).cuda() if not args.use_log_focal else LogFocalFrequencyLoss(
-                    alpha=args.freq_alpha,
-                    beta=args.freq_beta,
-                    focal_gamma=args.focal_gamma
-                ).cuda()
-                print(f"Initialized spectral loss: {'LogFocalFrequencyLoss' if args.use_log_focal else 'FocalFrequencyLoss'}")
+                if args.magnitude_only:
+                    self.spectral_loss_fn = MagnitudeFrequencyLoss(
+                        alpha=args.freq_alpha,
+                        use_focal_weight=not args.disable_focal_weight,
+                        focal_lambda=args.focal_lambda,
+                        norm=args.fft_norm
+                    ).cuda()
+                    print(f"Initialized magnitude-only frequency loss")
+                elif args.use_log_focal:
+                    self.spectral_loss_fn = LogFocalFrequencyLoss(
+                        alpha=args.freq_alpha,
+                        beta=args.freq_beta,
+                        focal_gamma=args.focal_gamma
+                    ).cuda()
+                    print(f"Initialized log-focal frequency loss")
+                else:
+                    self.spectral_loss_fn = FocalFrequencyLoss(
+                        alpha=args.freq_alpha,
+                        beta=args.freq_beta,
+                        focal_lambda=args.focal_lambda
+                    ).cuda()
+                    print(f"Initialized sigmoid-focal frequency loss")
             except Exception as e:
                 print(f"Error initializing spectral loss: {e}")
                 self.spectral_loss_fn = None
@@ -50,19 +63,23 @@ class Evaluator:
         
         # Print the loss type being used for evaluation
         print(f"Using loss type for evaluation: {args.loss}")
+        if args.magnitude_only:
+            print(f"Using magnitude-only frequency loss (no phase component)")
+        
         if args.use_spectral_loss:
             print(f"Additional spectral loss enabled with weight: {args.spectral_loss_weight}")
-            print(f"Spectral loss parameters - Alpha: {args.freq_alpha}, Beta: {args.freq_beta}")
-            if args.use_log_focal:
+        
+        if args.use_spectral_loss or args.loss in ['frequency', 'hybrid', 'curriculum']:
+            print(f"Spectral loss parameters - Alpha: {args.freq_alpha}" + 
+                  (f", Beta: {args.freq_beta}" if not args.magnitude_only else ""))
+            
+            if args.use_log_focal and not args.disable_focal_weight:
                 print(f"Using logarithmic focal weighting with gamma: {args.focal_gamma}")
-            else:
+            elif not args.disable_focal_weight:
                 print(f"Using sigmoid focal weighting with lambda: {args.focal_lambda}")
-        elif args.loss in ['frequency', 'hybrid']:
-            print(f"Frequency loss parameters - Alpha: {args.freq_alpha}, Beta: {args.freq_beta}")
-            if args.use_log_focal:
-                print(f"Using logarithmic focal weighting with gamma: {args.focal_gamma}")
             else:
-                print(f"Using sigmoid focal weighting with lambda: {args.focal_lambda}")
+                print("Focal weighting disabled")
+                
             if args.loss == 'hybrid':
                 print(f"Hybrid loss weight: {args.hybrid_weight}")
                 
@@ -83,36 +100,78 @@ class Evaluator:
                 with torch.cuda.amp.autocast() if self.args.use_amp else torch.no_grad():
                     output = self.model(sample)
                     
+                    # Calculate L1 loss (needed for all cases)
+                    l1_loss, l1_loss_dict = get_loss(output, sample)
+                    
                     # Calculate the primary loss based on the selected loss type
                     if self.args.loss == 'l1':
-                        _, loss_dict = get_loss(output, sample)
+                        loss = l1_loss
+                        loss_dict = l1_loss_dict
+                        
                     elif self.args.loss == 'frequency':
-                        _, loss_dict = get_frequency_loss(output, sample, 
-                                                       alpha=self.args.freq_alpha, 
-                                                       beta=self.args.freq_beta,
-                                                       phase_weight=self.args.phase_weight,
-                                                       use_log_focal=self.args.use_log_focal,
-                                                       focal_gamma=self.args.focal_gamma,
-                                                       focal_lambda=self.args.focal_lambda)
+                        loss, loss_dict = get_frequency_loss(
+                            output, sample, 
+                            alpha=self.args.freq_alpha, 
+                            beta=self.args.freq_beta,
+                            phase_weight=self.args.phase_weight,
+                            use_log_focal=self.args.use_log_focal,
+                            focal_gamma=self.args.focal_gamma,
+                            focal_lambda=self.args.focal_lambda,
+                            magnitude_only=self.args.magnitude_only,
+                            use_focal_weight=not self.args.disable_focal_weight,
+                            norm=self.args.fft_norm
+                        )
+                        
                     elif self.args.loss == 'hybrid':
-                        # Compute both losses
-                        _, l1_loss_dict = get_loss(output, sample)
-                        freq_loss, freq_loss_dict = get_frequency_loss(output, sample, 
-                                                                     alpha=self.args.freq_alpha, 
-                                                                     beta=self.args.freq_beta,
-                                                                     phase_weight=self.args.phase_weight,
-                                                                     use_log_focal=self.args.use_log_focal,
-                                                                     focal_gamma=self.args.focal_gamma,
-                                                                     focal_lambda=self.args.focal_lambda)
+                        # Compute frequency loss
+                        freq_loss, freq_loss_dict = get_frequency_loss(
+                            output, sample, 
+                            alpha=self.args.freq_alpha, 
+                            beta=self.args.freq_beta,
+                            phase_weight=self.args.phase_weight,
+                            use_log_focal=self.args.use_log_focal,
+                            focal_gamma=self.args.focal_gamma,
+                            focal_lambda=self.args.focal_lambda,
+                            magnitude_only=self.args.magnitude_only,
+                            use_focal_weight=not self.args.disable_focal_weight,
+                            norm=self.args.fft_norm
+                        )
                         
                         # Combine losses with weighting
                         w = self.args.hybrid_weight
-                        hybrid_loss = w * freq_loss + (1-w) * l1_loss_dict['optimization_loss']
+                        loss = w * freq_loss + (1-w) * l1_loss
                         
                         # Combine the loss dicts
-                        loss_dict = freq_loss_dict.copy()
-                        loss_dict['hybrid_loss'] = hybrid_loss.detach().item()
-                        loss_dict['optimization_loss'] = hybrid_loss.detach().item()
+                        loss_dict = {**freq_loss_dict, **l1_loss_dict}
+                        loss_dict['hybrid_loss'] = loss.detach().item()
+                        loss_dict['optimization_loss'] = loss.detach().item()
+                    
+                    elif self.args.loss == 'curriculum':
+                        # In evaluation, use the final spectral weight
+                        spectral_weight = self.args.final_spectral_weight
+                        
+                        # Calculate frequency loss
+                        freq_loss, freq_loss_dict = get_frequency_loss(
+                            output, sample, 
+                            alpha=self.args.freq_alpha, 
+                            beta=self.args.freq_beta,
+                            phase_weight=self.args.phase_weight,
+                            use_log_focal=self.args.use_log_focal,
+                            focal_gamma=self.args.focal_gamma,
+                            focal_lambda=self.args.focal_lambda,
+                            magnitude_only=self.args.magnitude_only,
+                            use_focal_weight=not self.args.disable_focal_weight,
+                            norm=self.args.fft_norm
+                        )
+                        
+                        # Combine losses with curriculum weight
+                        loss = (1 - spectral_weight) * l1_loss + spectral_weight * freq_loss
+                        
+                        # Update loss dictionary
+                        loss_dict = {**l1_loss_dict, **freq_loss_dict}
+                        loss_dict['curriculum_spectral_weight'] = spectral_weight
+                        loss_dict['optimization_loss'] = loss.detach().item()
+                        
                     else:
                         raise ValueError(f"Unknown loss type: {self.args.loss}")
                     
@@ -121,21 +180,39 @@ class Evaluator:
                         y_pred = output['y_pred']
                         y, mask_hr = sample['y'], sample['mask_hr']
                         
-                        # Calculate spectral loss
-                        spectral_loss, mag_loss, phase_loss = self.spectral_loss_fn(y_pred, y, mask_hr)
+                        # Use the spectral loss with configured parameters
+                        if isinstance(self.spectral_loss_fn, MagnitudeFrequencyLoss):
+                            spectral_loss, spectral_mag_loss = self.spectral_loss_fn(y_pred, y, mask_hr)
+                            spectral_phase_loss = torch.tensor(0.0, device=y_pred.device)
+                        else:
+                            spectral_loss, spectral_mag_loss, spectral_phase_loss = self.spectral_loss_fn(y_pred, y, mask_hr)
                         
                         # Add spectral loss components to the loss dict
                         loss_dict['spectral_loss'] = spectral_loss.detach().item()
-                        loss_dict['spectral_mag_loss'] = mag_loss.detach().item()
-                        loss_dict['spectral_phase_loss'] = phase_loss.detach().item()
+                        loss_dict['spectral_mag_loss'] = spectral_mag_loss.detach().item()
+                        if not isinstance(self.spectral_loss_fn, MagnitudeFrequencyLoss):
+                            loss_dict['spectral_phase_loss'] = spectral_phase_loss.detach().item()
                         
                         # Combine with primary loss
                         w_spectral = self.args.spectral_loss_weight
-                        combined_loss = (1 - w_spectral) * loss_dict['optimization_loss'] + w_spectral * spectral_loss
+                        combined_loss = (1 - w_spectral) * loss + w_spectral * spectral_loss
                         
                         # Update loss for reporting
                         loss_dict['combined_loss'] = combined_loss.detach().item()
-                        loss_dict['optimization_loss'] = combined_loss.detach().item()  # For consistent tracking
+                        loss_dict['original_loss'] = loss.detach().item()
+                        loss = combined_loss
+                        loss_dict['optimization_loss'] = loss.detach().item()
+
+                    # Always ensure L1 and MSE metrics are available for fair comparison
+                    if 'l1_loss' not in loss_dict or 'mse_loss' not in loss_dict:
+                        y_pred = output['y_pred']
+                        y, mask_hr = sample['y'], sample['mask_hr']
+                        if 'l1_loss' not in loss_dict:
+                            l1 = torch.nn.functional.l1_loss(y_pred[mask_hr == 1.], y[mask_hr == 1.])
+                            loss_dict['l1_loss'] = l1.detach().item()
+                        if 'mse_loss' not in loss_dict:
+                            mse = torch.nn.functional.mse_loss(y_pred[mask_hr == 1.], y[mask_hr == 1.])
+                            loss_dict['mse_loss'] = mse.detach().item()
 
                 for key in loss_dict:
                     test_stats[key] += loss_dict[key]

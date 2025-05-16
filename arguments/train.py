@@ -25,7 +25,7 @@ parser.add_argument('--no-flip', action='store_true', default=False, help='Switc
 parser.add_argument('--in-memory', action='store_true', default=False, help='Hold data in memory during training')
 
 # training
-parser.add_argument('--loss', default='l1', type=str, choices=['l1', 'frequency', 'hybrid'])
+parser.add_argument('--loss', default='l1', type=str, choices=['l1', 'frequency', 'hybrid', 'curriculum'])
 parser.add_argument('--use_spectral_loss', action='store_true', default=False, help='Use spectral loss in addition to the primary loss')
 parser.add_argument('--spectral_loss_weight', type=float, default=0.5, help='Weight for spectral loss when used with --use_spectral_loss (0.0-1.0)')
 
@@ -36,6 +36,15 @@ parser.add_argument('--phase-weight', type=float, default=0.5, help='Legacy para
 parser.add_argument('--use-log-focal', action='store_true', default=False, help='Use logarithmic-based focal weighting instead of sigmoid-based')
 parser.add_argument('--focal-lambda', type=float, default=0.5, help='Controls strength of sigmoid-based focal weighting (higher = stronger effect)')
 parser.add_argument('--focal-gamma', type=float, default=2.0, help='Controls strength of log-based focal weighting (higher = stronger effect)')
+
+# New parameters
+parser.add_argument('--magnitude-only', action='store_true', default=False, help='Use only magnitude component of frequency loss (no phase)')
+parser.add_argument('--disable-focal-weight', action='store_true', default=False, help='Disable focal weighting in frequency loss')
+parser.add_argument('--fft-norm', type=str, default='ortho', choices=['ortho', 'forward', 'backward', None], help='Normalization method for FFT')
+parser.add_argument('--initial-spectral-weight', type=float, default=0.01, help='Initial weight for spectral loss in hybrid/curriculum mode')
+parser.add_argument('--final-spectral-weight', type=float, default=0.3, help='Final weight for spectral loss in curriculum mode')
+parser.add_argument('--curriculum-delay-epochs', type=int, default=0, help='Number of epochs to use only L1 loss before introducing spectral loss')
+parser.add_argument('--curriculum-ramp-epochs', type=int, default=0, help='Number of epochs to linearly increase spectral loss weight from initial to final')
 
 parser.add_argument('--hybrid-weight', type=float, default=0.5, help='Weight for frequency loss in hybrid loss (freq*w + l1*(1-w))')
 parser.add_argument('--num-epochs', type=int, default=4500) 
