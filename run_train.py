@@ -566,7 +566,17 @@ class Trainer:
             raise RuntimeError(f'No checkpoint found at \'{path}\'')
 
         checkpoint = torch.load(path)
-        self.model.load_state_dict(checkpoint['model'])
+        
+        if 'model' in checkpoint:
+            # Handle legacy keys from the original codebase
+            model_dict = checkpoint['model']
+            # Pop unnecessary keys that aren't in the new model
+            model_dict.pop('logk2', None)
+            model_dict.pop('mean_guide', None) 
+            model_dict.pop('std_guide', None)
+            self.model.load_state_dict(model_dict)
+        else:
+            self.model.load_state_dict(checkpoint)
         
         if not self.args.no_opt:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
