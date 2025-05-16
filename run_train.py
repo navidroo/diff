@@ -103,7 +103,9 @@ class Trainer:
         self.best_optimization_loss = np.inf
 
         if args.resume is not None:
-            self.resume(path=args.resume)
+            # Add a new argument to control optimizer loading
+            self.args.load_optimizer = getattr(args, 'load_optimizer', False)
+            self.resume(path=args.resume, load_optimizer=self.args.load_optimizer)
 
         # Print the loss type being used
         print(f"Using loss type: {args.loss}")
@@ -561,7 +563,7 @@ class Trainer:
             
         torch.save(save_dict, os.path.join(self.experiment_folder, f'{prefix}_model.pth'))
 
-    def resume(self, path):
+    def resume(self, path, load_optimizer=True):
         if not os.path.isfile(path):
             raise RuntimeError(f'No checkpoint found at \'{path}\'')
 
@@ -578,15 +580,36 @@ class Trainer:
         else:
             self.model.load_state_dict(checkpoint)
         
-        if not self.args.no_opt:
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-            self.scheduler.load_state_dict(checkpoint['scheduler'])
-            
-        if 'amp_scaler' in checkpoint and self.args.use_amp and self.scaler is not None:
-            self.scaler.load_state_dict(checkpoint['amp_scaler'])
-            
-        self.epoch = checkpoint['epoch']
-        self.iter = checkpoint['iter']
+        # Try to load optimizer and scheduler states if requested
+        if not self.args.no_opt and load_optimizer:
+            try:
+                if 'optimizer' in checkpoint:
+                    self.optimizer.load_state_dict(checkpoint['optimizer'])
+                if 'scheduler' in checkpoint:
+                    self.scheduler.load_state_dict(checkpoint['scheduler'])
+                
+                # Set epoch and iteration from checkpoint
+                if 'epoch' in checkpoint:
+                    self.epoch = checkpoint['epoch']
+                if 'iter' in checkpoint:
+                    self.iter = checkpoint['iter']
+                    
+                # Load AMP scaler if available
+                if 'amp_scaler' in checkpoint and self.args.use_amp and self.scaler is not None:
+                    self.scaler.load_state_dict(checkpoint['amp_scaler'])
+                    
+                print(f"Loaded optimizer and scheduler states from checkpoint '{path}'")
+            except (ValueError, KeyError) as e:
+                print(f"Warning: Failed to load optimizer/scheduler: {e}")
+                print("Starting with fresh optimizer and scheduler states.")
+                # Keep epoch and iter at 0 since we're not continuing the same training
+                self.epoch = 0
+                self.iter = 0
+        else:
+            # Not loading optimizer state, so start from epoch 0
+            self.epoch = 0
+            self.iter = 0
+            print(f"Loaded only model weights from '{path}', starting from epoch 0")
 
         print(f'Checkpoint \'{path}\' loaded.')
 

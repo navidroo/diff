@@ -9,6 +9,7 @@ parser.add_argument('--logstep-train', default=10, type=int, help='Training log 
 parser.add_argument('--save-model', default='both', choices=['last', 'best', 'no', 'both'])
 parser.add_argument('--val-every-n-epochs', type=int, default=1, help='Validation interval in epochs')
 parser.add_argument('--resume', type=str, default=None, help='Checkpoint path to resume')
+parser.add_argument('--load-optimizer', action='store_true', default=False, help='Load optimizer state when resuming (may fail with architectural changes)')
 parser.add_argument('--seed', type=int, default=12345, help='Random seed')
 parser.add_argument('--wandb', action='store_true', default=False, help='Use Weights & Biases instead of TensorBoard')
 parser.add_argument('--wandb-project', type=str, default='DADA-SR', help='Wandb project name')
